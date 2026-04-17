@@ -1,28 +1,36 @@
 # LLM Reasoning with MCTS
 
-This repository explores enhancing LLM reasoning through **Monte Carlo Tree Search (MCTS)**. The MCTS framework guides the generation process by iteratively building a search tree, evaluating partial solutions, and fine-tuning a local LLaMA2 model on high-reward trajectories.
+Enhancing large language model (LLM) reasoning through **Monte Carlo Tree Search (MCTS)**. Rather than sampling a single chain of thought, this framework builds an explicit search tree over partial reasoning steps, uses PUCT-based selection to focus compute on promising branches, and iteratively fine-tunes a local LLaMA2 model on high-reward trajectories — progressively reducing reliance on GPT-4.
 
-The Tree-of-Thoughts (ToT) baseline is included for comparison on the same task benchmarks.
-
-![Teaser](pics/teaser.png)
+A Tree-of-Thoughts (BFS) baseline is included for comparison on the same benchmarks.
 
 ---
 
-## Overview
+## How It Works
 
-### MCTS + LLM (`src/mcts/`)
+```
+┌─────────────────────────────────────────────────────────┐
+│                     MCTS + Fine-tuning Loop             │
+│                                                         │
+│  for each training iteration:                           │
+│    for each puzzle:                                     │
+│      ┌── Selection  (PUCT)                              │
+│      │   traverse existing nodes to find a leaf         │
+│      ├── Expansion                                      │
+│      │   generate K candidate next steps                │
+│      │   via GPT-4 (early) or LLaMA2 (later)           │
+│      ├── Simulation                                     │
+│      │   roll each candidate to completion              │
+│      │   compute letter-level reward                    │
+│      └── Backpropagation                                │
+│          update Q and N along the path                  │
+│                                                         │
+│    Fine-tune LLaMA2 (LoRA) on best trajectories        │
+│    Evaluate on held-out validation set                  │
+└─────────────────────────────────────────────────────────┘
+```
 
-The core contribution. At each reasoning step:
-
-1. **Selection** — traverse existing tree nodes using PUCT scoring
-2. **Expansion** — generate candidate next steps via GPT-4 or LLaMA2
-3. **Simulation** — roll each candidate out to completion and compute a reward
-4. **Backpropagation** — update Q/N values along the visited path
-5. **Fine-tuning** — periodically fine-tune LLaMA2 on high-reward trajectories (LoRA / QLoRA)
-
-### Tree of Thoughts baseline (`src/tot/`)
-
-BFS-based deliberate reasoning over candidate thoughts, as described in [Yao et al., 2023](https://arxiv.org/abs/2305.10601). Supports Game of 24, mini crosswords, and creative writing tasks.
+**GPT-4 → LLaMA2 annealing:** GPT-4 drives expansion in early iterations (90% probability), linearly handing off to the locally fine-tuned LLaMA2 over the course of training. This lets the model bootstrap from a strong prior and then self-improve.
 
 ---
 
@@ -32,32 +40,17 @@ BFS-based deliberate reasoning over candidate thoughts, as described in [Yao et 
 .
 ├── src/
 │   ├── mcts/
-│   │   ├── crossword_mcts.py   # CrosswordsEnv and MiniCrosswordsTask
-│   │   └── mcts_cot.py         # MCTS construction, rollout, and LLaMA2 fine-tuning loop
+│   │   ├── crossword_mcts.py   # CrosswordsEnv: state, reward, prompt construction
+│   │   └── mcts_cot.py         # MCTS search, rollout, LLaMA2 fine-tuning loop
 │   └── tot/
-│       ├── __init__.py
-│       ├── models.py            # OpenAI API wrapper
-│       ├── methods/
-│       │   └── bfs.py           # BFS solver for ToT
-│       ├── prompts/             # Task-specific prompts
-│       │   ├── crosswords.py
-│       │   ├── game24.py
-│       │   └── text.py
-│       ├── tasks/               # Task definitions
-│       │   ├── base.py
-│       │   ├── crosswords.py
-│       │   ├── game24.py
-│       │   └── text.py
+│       ├── models.py            # OpenAI ChatCompletion wrapper with retry/backoff
+│       ├── methods/bfs.py       # BFS solver (Tree-of-Thoughts baseline)
+│       ├── prompts/             # Few-shot prompts for each task
+│       ├── tasks/               # Task definitions (crosswords, game24, text)
 │       └── data/                # Benchmark datasets
-│           ├── 24/
-│           ├── crosswords/
-│           └── text/
-├── scripts/                     # Shell scripts for running experiments
-│   ├── crosswords/
-│   ├── game24/
-│   └── text/
-├── logs/                        # Pre-computed experiment results
-├── run.py                       # ToT entry point
+├── scripts/                     # Shell scripts for reproducing experiments
+├── logs/                        # Pre-computed baseline results (GPT-4)
+├── run.py                       # Entry point for the ToT baseline
 ├── requirements.txt
 └── setup.py
 ```
@@ -72,39 +65,38 @@ cd LLM_Reasoning_w_MCTS
 pip install -e .
 ```
 
-Set your OpenAI API key:
+Set environment variables:
 
 ```bash
-export OPENAI_API_KEY=your_key_here
+export OPENAI_API_KEY=<your_openai_key>
+export HUGGING_FACE_HUB_TOKEN=<your_hf_token>   # required for LLaMA2
 ```
 
 ---
 
 ## Usage
 
-### MCTS + LLaMA2 (crosswords)
+### MCTS + LLaMA2 (mini crosswords)
 
 ```bash
 cd src/mcts
 python mcts_cot.py \
     --model_name meta-llama/Llama-2-13b-hf \
     --use_peft \
+    --load_in_8bit \
     --batch_size 4 \
     --gradient_accumulation_steps 2 \
-    --load_in_8bit \
     --num_train_epochs 10 \
-    --learning_rate 2.0e-5
+    --learning_rate 2e-5
 ```
 
-The script will:
-- Alternate between GPT-4 (for early exploration) and LLaMA2 (as training progresses) to generate candidate actions
-- Fine-tune LLaMA2 via LoRA after each iteration
-- Save generated trajectories under `saved_generation/crosswords/`
+Generated trajectories are saved under `saved_generation/crosswords/`.  
+Final rewards per iteration are pickled to `saved_generation/crosswords/result.pkl`.
 
-### Tree of Thoughts (BFS)
+### Tree-of-Thoughts baseline (BFS)
 
+**Game of 24:**
 ```bash
-# Game of 24
 python run.py \
     --task game24 \
     --backend gpt-4 \
@@ -116,43 +108,48 @@ python run.py \
     --n_select_sample 5 \
     --task_start_index 900 \
     --task_end_index 1000
+```
 
-# Mini crosswords (naive CoT)
+**Mini crosswords (CoT sampling):**
+```bash
 python run.py \
     --task crosswords \
     --backend gpt-4 \
     --naive_run \
     --prompt_sample cot \
-    --n_generate_sample 10
+    --n_generate_sample 10 \
+    --task_start_index 0 \
+    --task_end_index 20
 ```
 
-See `scripts/` for more experiment configurations.
+See `scripts/` for the full set of experiment configurations.
 
 ---
 
-## Key Design Choices
+## Key Hyperparameters
 
-| Component | Detail |
-|---|---|
-| **Action generation** | GPT-4 (Azure) or LLaMA2 beam search |
-| **Selection policy** | PUCT with exploration constant c=1.0 |
-| **Reward** | Letter-level accuracy on the 5×5 grid |
-| **Fine-tuning** | SFTTrainer + LoRA (PEFT) |
-| **GPT → LLaMA2 annealing** | GPT usage decays linearly from 90% → 10% over training |
+| Parameter | Default | Description |
+|---|---|---|
+| `rollout_num` | 10 | MCTS rollouts per puzzle step |
+| `depth_limit` | 20 | Maximum reasoning depth |
+| `num_different_action` | 5 | Candidate actions generated per expansion |
+| `train_iterations` | 20 | Fine-tuning iterations |
+| `data_num_per_training` | 10 | Puzzles sampled per iteration |
+| PUCT `c` | 1.0 | Exploration constant |
 
 ---
 
 ## Requirements
 
 - Python ≥ 3.8
-- CUDA GPU (recommended for LLaMA2 fine-tuning)
-- OpenAI API key (GPT-4 access)
-- Hugging Face token (LLaMA2 access)
+- CUDA GPU (strongly recommended for LLaMA2 fine-tuning; 24 GB+ VRAM for 13B in 8-bit)
+- OpenAI API key with GPT-4 access
+- Hugging Face token with LLaMA2 access
 
-See `requirements.txt` for the full dependency list.
+Full dependency list: [`requirements.txt`](requirements.txt)
 
 ---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+[MIT License](LICENSE)
