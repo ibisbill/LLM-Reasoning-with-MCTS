@@ -49,7 +49,6 @@ A Tree-of-Thoughts (BFS) baseline is included for comparison on the same benchma
 │       ├── tasks/               # Task definitions (crosswords, game24, text)
 │       └── data/                # Benchmark datasets
 ├── scripts/                     # Shell scripts for reproducing experiments
-├── logs/                        # Pre-computed baseline results (GPT-4)
 ├── run.py                       # Entry point for the ToT baseline
 ├── requirements.txt
 └── setup.py
