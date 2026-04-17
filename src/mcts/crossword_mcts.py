@@ -1,21 +1,23 @@
 import re
 import os
 import json
-from src.tot.tasks.base import Task, DATA_PATH
-from src.tot.prompts.crosswords import * 
-from src.tot.models import gpt
-# import openai
-# import torch
-# import torch.optim as optim
 import numpy as np
-from src.tot.prompts.crosswords import cot_prompt, chat_cot_prompt_small
 import copy
-#from tot.models import gpt
+
+from src.tot.tasks.base import Task, DATA_PATH
+from src.tot.prompts.crosswords import cot_prompt, chat_cot_prompt_small
+
 
 class CrosswordsEnv:
+    """
+    Environment for 5x5 mini crossword puzzles.
+
+    Each task consists of 5 horizontal clues and 5 vertical clues.
+    The model generates letter-by-letter answers which are evaluated
+    against the ground-truth board.
+    """
+
     def __init__(self, file="../tot/data/crosswords/mini0505.json", reward_type='reward_rule'):
-        # DATA_PATH = '/home/ziyu/code/LLMs/mcts-llm/src/tot/data/crosswords/mini0505.json'
-        # self.file = os.path.join(DATA_PATH, 'crosswords', file)
         self.file = file
         self.file = json.load(open(self.file))
         self.task_num = len(self.file)
@@ -30,27 +32,27 @@ class CrosswordsEnv:
         self.current_input = self.task_inputs[self.task_id]
         self.current_answer = self.task_answers[self.task_id]
 
-    def reset(self, task_id): 
-        self.task_id = task_id 
+    def reset(self, task_id):
+        self.task_id = task_id
         self.current_input = self.task_inputs[self.task_id]
         self.current_answer = self.task_answers[self.task_id]
 
     def get_input_data(self, state, num=5, stop_endline=True):
-        # old_prompt = "Input: h1. A lunar valley\nh2. A fatty oil\nh3. To entice\nh4. To lower; to reduce\nh5. A solitary person\nv1. According to the roster\nv2. Another name for Port-Francqui\nv3. An illicit lover; a European lake\nv4. To lisp\nv5. To come in\nThoughts:\nh1. Presented; revealed: SHOWN\nh2. An interjection expressing sorrow: WIRRA\nh3. Benefit; result: AVAIL\nh4. A cigarette: RETTE\nh5. Chased up a tree: TREED\nv1. Swarthy; tawny: SWART\nv2. An apiarist or bee keeper: HIVER\nv3. To speak formally: ORATE\nv4. To indite; to scribble: WRITE\nv5. An insecticide: NALED\nOutput:R I L L E\nO L E I N\nT E M P T\nA B A S E\nL O N E R\nInput: {input}\n{state}"
-        input_data = {  
-            "messages": [  
-                {"role": "system", "content": "You are a clever AI Assistant which carefully follow the instruction to solve the problem."},  
+        input_data = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a clever AI Assistant which carefully follow the instruction to solve the problem.",
+                },
                 {"role": "user", "content": self.get_whole_prompt(state=state)},
-                #{"role": "user", "content": "Output:"}
-            ],  
+            ],
             "max_tokens": 500,
             "temperature": 0.7,
-            "n":num,
-            "stop": '\n' if stop_endline else []
+            "n": num,
+            "stop": '\n' if stop_endline else [],
         }
-
         return input_data
-    
+
     def get_whole_prompt(self, state=''):
         input = self.get_input()
         return chat_cot_prompt_small.format(input=input, state=state)
@@ -58,17 +60,14 @@ class CrosswordsEnv:
     def get_input(self):
         section = ""
         for i, item in enumerate(self.current_input):
-            #section += f"h{i + 1}. {{}}".format(item)
             if i < 5:
                 section += f"h{i + 1}. {item}\n"
             else:
                 section += f"v{i - 4}. {item}\n"
-            #section += cot_prompt_format.format(input=section)
         section += "Thoughts:"
-        #print(section)
         return section
 
-    def __len__(self): # question
+    def __len__(self):
         return self.task_num
 
     def reward(self, output_raw: str):
@@ -80,17 +79,15 @@ class CrosswordsEnv:
             letters.extend(letters_line)
 
         letters = letters + [' '] * (25 - len(letters))
-        
+
         if len(letters) != 25 or len(self.current_answer) != 25:
-            print('error here')
-            from IPython import embed; embed()
-        
+            print('Warning: unexpected output length in reward computation')
+            return 0.0
+
         reward_letter = 0
         reward_word = 0
-        # print(letters)
 
         for i in range(0, len(letters), 5):
-            # print(letters[i:i+5])
             if letters[i:i+5] == self.current_answer[i:i+5]:
                 reward_word += 1
         for i in range(5):
@@ -103,20 +100,18 @@ class CrosswordsEnv:
                 reward_letter += 1
         reward_letter = reward_letter / 25
 
-        reward_map = {'reward_letter': reward_letter, 'reward_word': reward_word, 'reward_rule': reward_letter}
+        reward_map = {
+            'reward_letter': reward_letter,
+            'reward_word': reward_word,
+            'reward_rule': reward_letter,
+        }
         return reward_map[self.reward_type]
 
     def answered(self, output: str):
         if "Output:\n" in output:
             if len(output.strip().split('Output:\n')[-1].split('\n')) == 5:
                 return True
-        else:
-            return False
-        # response = gpt(self.prompt_wrap(env.render()), model='gpt-4', n=1)[0]
-        # if response == "answered":
-        #     return True
-        # else:
-        #     return False
+        return False
 
     def get_ans(self, board):
         ans = [''] * 10
@@ -128,83 +123,41 @@ class CrosswordsEnv:
 
     def render_clues(self, status=None):
         s = ""
-        # s += "Horizontal:\n"
         for i in range(5):
             if status is None or self.status[i] == status:
                 s += 'h' + str(i+1) + '. ' + self.data[i] + '\n'
-        # s += "Vertical:\n"
         for i in range(5, 10):
             if status is None or self.status[i] == status:
                 s += 'v' + str(i-5+1) + '. ' + self.data[i] + '\n'
         return s
 
+
 class MiniCrosswordsTask(Task):
     """
-    Input (x)   : Decription of a 5x5 mini crossword
-    Output (y)  : List of 10 words to fill in the crossword
-    Reward (r)  : word level and game level
-    Input Example: 
-    Output Example: 
+    Tree-of-Thoughts task wrapper for the 5x5 mini crossword environment.
+
+    Input  (x): Description of a 5x5 mini crossword (10 clues)
+    Output (y): 10 five-letter words filling the grid
+    Reward (r): Word-level and letter-level accuracy
     """
+
     def __init__(self, file):
-        """
-        file: a csv file (fixed)
-        """
         super().__init__()
-        self.env = CrosswordsEnv(file)  # use it as a stateless tool
+        self.env = CrosswordsEnv(file)
         self.xs = []
         for idx in range(len(self.env)):
             self.env.reset(idx)
             self.xs.append(self.env.render_clues())
-        self.steps = 10  
+        self.steps = 10
         self.cache_proposals = {}
 
     def __len__(self) -> int:
         return len(self.env)
 
-
     def set_status(self, x: str, y: str):
         idx = self.xs.index(x)
-        self.test_output(idx, y) 
+        self.test_output(idx, y)
 
     def get_input(self, idx: int) -> str:
         self.env.reset(idx)
         return self.env.render_clues()
-
-
-### 测试实例
-if __name__ == '__main__':
-    file='/home/ziyu/code/LLMs/mcts-llm/src/tot/data/crosswords/mini0505.json'
-    env = CrosswordsEnv(file)
-    env.reset(5)
-    onput = '''R I L L E
-O L E I N
-T E M P T
-A B A S E
-L O N E R'''
-    # output = [   "A",
-    #         "G",
-    #         "E",
-    #         "N",
-    #         "D",
-    #         "M",
-    #         "O",
-    #         "T",
-    #         "O",
-    #         "R",
-    #         "A",
-    #         "R",
-    #         "T",
-    #         "S",
-    #         "Y",
-    #         "S",
-    #         "A",
-    #         "L",
-    #         "L",
-    #         "E",
-    #         "S",
-    #         "L",
-    #         "E",
-    #         "E",
-    #         "R"]
-    env.reward(onput)

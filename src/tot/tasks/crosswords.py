@@ -58,7 +58,7 @@ from src.tot.models import gpt
 #         return parsed_lines if len(parsed_lines) >= 1 else None
 
 
-#     # reward用上一个的分数写
+#     # use the score from the previous step as reward
 #     def reward(self):
 #         obs = self.render()
 #         if obs in env.cache: 
@@ -463,7 +463,7 @@ class MiniCrosswordsTask(Task):
         return count
 
 
-### 测试实例
+### Example usage
 if __name__ == '__main__':
     env = MiniCrosswordsEnv()
     env.reset(5)
